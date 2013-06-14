@@ -129,7 +129,7 @@ class LinkedInProvider(object):
                             secret=cred['oauthAccessTokenSecret'])
         client = oauth.Client(consumer, token)
         profile_url = 'http://api.linkedin.com/v1/people/~'
-        profile_url += ':(first-name,last-name,id,date-of-birth,picture-url)'
+        profile_url += ':(first-name,last-name,id,date-of-birth,picture-url,email-address)'
         profile_url += '?format=json'
         resp, content = client.request(profile_url)
 
@@ -143,12 +143,19 @@ class LinkedInProvider(object):
         profile['name'] = {
             'givenName': data['firstName'],
             'familyName': data['lastName'],
-            'formatted': '%s %s' % (data['firstName'], data['lastName'])
+            'formatted': '%s %s' % (data['firstName'], data['lastName']),
         }
+        if data.get('emailAddress'):
+            profile['emails'] = [{'value':data.get('emailAddress')}]
+
+        if data.get('pictureUrl'):
+            profile['photos'] = [{'value': data.get('pictureUrl')}]
+
         profile['accounts'] = [{
             'domain':'linkedin.com',
             'userid':data['id']
         }]
+        
         return LinkedInAuthenticationComplete(profile=profile,
                                               credentials=cred,
                                               provider_name=self.name,

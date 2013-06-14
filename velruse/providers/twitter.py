@@ -3,6 +3,7 @@ from urlparse import parse_qs
 
 import oauth2 as oauth
 import requests
+import json
 
 from pyramid.httpexceptions import HTTPFound
 from pyramid.security import NO_PERMISSION_REQUIRED
@@ -15,10 +16,9 @@ from velruse.api import (
 from velruse.exceptions import ThirdPartyFailure
 from velruse.settings import ProviderSettings
 
-
 REQUEST_URL = 'https://api.twitter.com/oauth/request_token'
 ACCESS_URL = 'https://api.twitter.com/oauth/access_token'
-
+DATA_URL = 'https://api.twitter.com/1.1/users/show.json?screen_name=%s'
 
 class TwitterAuthenticationComplete(AuthenticationComplete):
     """Twitter auth complete"""
@@ -35,6 +35,8 @@ def add_twitter_login_from_settings(config, prefix='velruse.twitter.'):
     p = ProviderSettings(settings, prefix)
     p.update('consumer_key', required=True)
     p.update('consumer_secret', required=True)
+    p.update('access_token', required=False)
+    p.update('access_token_secret', required=False)
     p.update('login_path')
     p.update('callback_path')
     config.add_twitter_login(**p.kwargs)
@@ -43,13 +45,15 @@ def add_twitter_login_from_settings(config, prefix='velruse.twitter.'):
 def add_twitter_login(config,
                       consumer_key,
                       consumer_secret,
+                      access_token,
+                      access_token_secret,
                       login_path='/login/twitter',
                       callback_path='/login/twitter/callback',
                       name='twitter'):
     """
     Add a Twitter login provider to the application.
     """
-    provider = TwitterProvider(name, consumer_key, consumer_secret)
+    provider = TwitterProvider(name, consumer_key, consumer_secret, access_token, access_token_secret)
 
     config.add_route(provider.login_route, login_path)
     config.add_view(provider, attr='login', route_name=provider.login_route,
@@ -63,11 +67,13 @@ def add_twitter_login(config,
 
 
 class TwitterProvider(object):
-    def __init__(self, name, consumer_key, consumer_secret):
+    def __init__(self, name, consumer_key, consumer_secret, access_token=None, access_token_secret=None):
         self.name = name
         self.type = 'twitter'
         self.consumer_key = consumer_key
         self.consumer_secret = consumer_secret
+        self.access_token = access_token
+        self.access_token_secret = access_token_secret
 
         self.login_route = 'velruse.%s-login' % name
         self.callback_route = 'velruse.%s-callback' % name
@@ -115,6 +121,7 @@ class TwitterProvider(object):
         consumer = oauth.Consumer(self.consumer_key, self.consumer_secret)
 
         client = oauth.Client(consumer, request_token)
+        
         resp, content = client.request(ACCESS_URL, "POST")
         if resp['status'] != '200':
             raise ThirdPartyFailure("Status %s: %s" % (resp['status'], content))
@@ -127,6 +134,23 @@ class TwitterProvider(object):
             'userid':access_token['user_id'][0]
         }]
         profile['displayName'] = access_token['screen_name'][0]
+
+        if self.access_token and self.access_token_secret:
+            token = oauth.Token(key=self.access_token, secret=self.access_token_secret)
+            client = oauth.Client(consumer, token)
+            resp, content = client.request(DATA_URL % access_token['screen_name'][0], "GET")
+            if resp['status'] == '200':
+                # replace display name with the full name, and take additional data
+                profile_data = json.loads(content)
+                profile['preferredUsername'] = profile['displayName']
+                profile['displayName'] = profile_data.get('name') or profile['displayName']
+                profile['name'] = {'formatted': profile['displayName']}
+                if profile_data.get('url'):
+                    profile['urls'] = [{'value': profile_data.get('url')}]
+                if profile_data.get('location'):
+                    profile['addresses'] = [{'formatted': profile_data.get('location')}]
+                if profile_data.get('profile_image_url'):
+                    profile['photos'] = [{'value': profile_data.get('profile_image_url')}]
 
         cred = {'oauthAccessToken': access_token['oauth_token'][0],
                 'oauthAccessTokenSecret': access_token['oauth_token_secret'][0]}
